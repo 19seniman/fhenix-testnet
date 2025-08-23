@@ -24,7 +24,11 @@ git clone https://github.com/19seniman/fhenix-testnet.git
 cd fhenix-testnet
 ```
 ```
-npm install init -y
+npm init -y
+npm install dotenv axios ws uuid https-proxy-agent random-useragent
+npm install ethers
+npm install 
+prompt-sync
 ```
 ```
 nano .env
