@@ -25,10 +25,8 @@ cd fhenix-testnet
 ```
 ```
 npm init -y
-npm install dotenv axios ws uuid https-proxy-agent random-useragent
 npm install ethers
-npm install 
-prompt-sync
+npm install dotenv axios ws uuid https-proxy-agent random-useragent
 ```
 ```
 nano .env
