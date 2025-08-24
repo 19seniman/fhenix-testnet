@@ -16,7 +16,6 @@ const RUN_INTERVAL_HOURS = 24; // Atur interval eksekusi otomatis dalam jam
 // ==============================================================================
 
 
-// Definisi warna untuk konsol
 const colors = {
     green: '\x1b[92m',
     yellow: '\x1b[93m',
@@ -41,7 +40,7 @@ const logger = {
     summary: (msg) => console.log(`${colors.green}${colors.bold}[SUMMARY] ${msg}${colors.reset}`),
     banner: () => {
         const border = `${colors.blue}${colors.bold}╔═════════════════════════════════════════╗${colors.reset}`;
-        const title = `${colors.blue}${colors.bold}║      🍉 19Seniman From Insider 🍉      ║${colors.reset}`;
+        const title = `${colors.blue}${colors.bold}║      🍉  19Seniman From insider 🍉      ║${colors.reset}`;
         const bottomBorder = `${colors.blue}${colors.bold}╚═════════════════════════════════════════╝${colors.reset}`;
         console.log(`\n${border}`);
         console.log(`${title}`);
@@ -117,8 +116,7 @@ async function encrypt(contract, wallet, amount) {
 async function decrypt(contract, wallet, amount) {
     logger.loading(`Decrypting ${amount} eETH untuk ${wallet.address}...`);
     try {
-        // Asumsi jumlah eETH yang akan didekripsi sama dengan jumlah ETH yang dienkripsi
-        const amountToDecrypt = ethers.parseEther(amount);
+        const amountToDecrypt = ethers.parseUnits(amount, 18);
         const tx = await contract.decrypt(wallet.address, amountToDecrypt);
         await tx.wait();
         logger.success(`Dekripsi berhasil! Tx: ${tx.hash}`);
@@ -142,18 +140,19 @@ async function claim(contract) {
 // ====================================================================================
 
 /**
- * Fungsi inti yang menjalankan siklus penuh (Encrypt -> Decrypt -> Claim) untuk semua dompet.
- * @param {string} encryptAmount Jumlah ETH yang akan dienkripsi.
- * @param {number} cycleCount Jumlah siklus yang akan dijalankan per dompet.
+ * Fungsi inti yang memproses semua dompet. Fungsi ini akan dipanggil berulang kali.
+ * @param {Function} action Fungsi yang akan dijalankan (encrypt, decrypt, atau claim).
+ * @param {string} amount Jumlah yang akan digunakan.
+ * @param {number} txCount Jumlah transaksi per dompet.
  */
-async function runSequentialCycle(encryptAmount, cycleCount) {
+async function processWallets(action, amount, txCount) {
     const privateKeys = getPrivateKeys();
     if (privateKeys.length === 0) {
         logger.error("Tidak ada private key yang ditemukan di file .env.");
         return;
     }
 
-    logger.info(`Menemukan ${privateKeys.length} dompet. Memulai siklus penuh (${cycleCount} kali) per dompet.`);
+    logger.info(`Menemukan ${privateKeys.length} dompet. Memulai proses dengan ${txCount} transaksi per dompet.`);
     const provider = new ethers.JsonRpcProvider(rpcUrl);
 
     for (let i = 0; i < privateKeys.length; i++) {
@@ -163,50 +162,17 @@ async function runSequentialCycle(encryptAmount, cycleCount) {
             logger.info(`Alamat Dompet: ${wallet.address}`);
             const contract = new ethers.Contract(contractAddress, contractAbi, wallet);
 
-            for (let j = 0; j < cycleCount; j++) {
-                logger.loading(`Memulai siklus ${j + 1}/${cycleCount}...`);
-                let cycleSuccess = true;
-
-                // Langkah 1: Encrypt
+            for (let j = 0; j < txCount; j++) {
+                logger.loading(`Memulai transaksi ${j + 1}/${txCount}...`);
                 try {
-                    logger.step("Langkah 1: Encrypt ETH");
-                    await encrypt(contract, wallet, encryptAmount);
-                    await sleep(delayBetweenActions);
-                } catch (err) {
-                    logger.error(`Langkah Encrypt gagal. Menghentikan siklus untuk dompet ini.`);
-                    cycleSuccess = false;
-                }
-
-                // Langkah 2: Decrypt (hanya jika encrypt berhasil)
-                if (cycleSuccess) {
-                    try {
-                        logger.step("Langkah 2: Decrypt eETH");
-                        await decrypt(contract, wallet, encryptAmount);
+                    await action(contract, wallet, amount);
+                    logger.success(`Transaksi ${j + 1} selesai.`);
+                    if (j < txCount - 1) {
                         await sleep(delayBetweenActions);
-                    } catch (err) {
-                        logger.error(`Langkah Decrypt gagal. Menghentikan siklus untuk dompet ini.`);
-                        cycleSuccess = false;
                     }
-                }
-
-                // Langkah 3: Claim (hanya jika decrypt berhasil)
-                if (cycleSuccess) {
-                    try {
-                        logger.step("Langkah 3: Claim ETH");
-                        await claim(contract);
-                    } catch (err) {
-                        logger.error(`Langkah Claim gagal.`);
-                        cycleSuccess = false;
-                    }
-                }
-
-                if (!cycleSuccess) {
-                    break; // Keluar dari loop siklus jika ada langkah yang gagal
-                }
-
-                logger.success(`Siklus ${j + 1} selesai dengan sukses.`);
-                if (j < cycleCount - 1) {
-                    await sleep(delayBetweenActions); // Jeda antar siklus jika ada lebih dari satu
+                } catch (txError) {
+                    logger.error(`Transaksi ${j + 1} gagal. Menghentikan transaksi untuk dompet ini.`);
+                    break;
                 }
             }
         } catch (walletError) {
@@ -229,17 +195,37 @@ async function runSequentialCycle(encryptAmount, cycleCount) {
 async function main() {
     logger.banner();
 
-    const encryptAmount = await askQuestion("Masukkan jumlah ETH untuk dienkripsi di setiap siklus (cth: 0.01): ");
-    if (isNaN(parseFloat(encryptAmount)) || parseFloat(encryptAmount) <= 0) {
-        logger.error("Jumlah tidak valid. Silakan masukkan angka positif.");
-        rl.close();
-        return;
+    console.log(`${colors.yellow}Pilih tindakan yang ingin dilakukan:${colors.reset}`);
+    console.log("1. Encrypt ETH");
+    console.log("2. Decrypt eETH");
+    console.log("3. Claim All Decrypted ETH\n");
+
+    const choice = await askQuestion("Masukkan pilihan Anda (1, 2, atau 3): ");
+    let action;
+    let amount = "0";
+
+    switch (choice) {
+        case '1':
+            action = encrypt;
+            amount = await askQuestion("Masukkan jumlah ETH untuk dienkripsi (cth: 0.01): ");
+            break;
+        case '2':
+            action = decrypt;
+            amount = await askQuestion("Masukkan jumlah eETH untuk didekripsi (cth: 0.0001): ");
+            break;
+        case '3':
+            action = claim;
+            break;
+        default:
+            logger.error("Pilihan tidak valid. Silakan jalankan kembali skrip.");
+            rl.close();
+            return;
     }
 
-    const cycleCountStr = await askQuestion("Berapa kali siklus (Encrypt -> Decrypt -> Claim) ini ingin dijalankan untuk setiap dompet? ");
-    const cycleCount = parseInt(cycleCountStr, 10);
-    if (isNaN(cycleCount) || cycleCount < 1) {
-        logger.error("Jumlah siklus tidak valid. Masukkan angka lebih besar dari 0.");
+    const txCountStr = await askQuestion("Berapa kali transaksi ini ingin dijalankan untuk setiap dompet? ");
+    const txCount = parseInt(txCountStr, 10);
+    if (isNaN(txCount) || txCount < 1) {
+        logger.error("Jumlah transaksi tidak valid. Masukkan angka lebih besar dari 0.");
         rl.close();
         return;
     }
@@ -249,16 +235,16 @@ async function main() {
 
     // Eksekusi pertama kali
     logger.info("Memulai eksekusi pertama...");
-    await runSequentialCycle(encryptAmount, cycleCount);
+    await processWallets(action, amount, txCount);
 
     // Menjadwalkan eksekusi berikutnya
     const intervalInMs = RUN_INTERVAL_HOURS * 60 * 60 * 1000;
-    logger.summary(`Eksekusi pertama selesai. Bot akan menjalankan siklus penuh secara otomatis setiap ${RUN_INTERVAL_HOURS} jam.`);
+    logger.summary(`Eksekusi pertama selesai. Bot akan berjalan otomatis setiap ${RUN_INTERVAL_HOURS} jam.`);
     logger.countdown(intervalInMs / 1000);
 
     setInterval(async () => {
         logger.section(`Memulai eksekusi terjadwal setiap ${RUN_INTERVAL_HOURS} jam`);
-        await runSequentialCycle(encryptAmount, cycleCount);
+        await processWallets(action, amount, txCount);
         logger.summary("Eksekusi terjadwal selesai. Menunggu interval berikutnya.");
         logger.countdown(intervalInMs / 1000);
     }, intervalInMs);
